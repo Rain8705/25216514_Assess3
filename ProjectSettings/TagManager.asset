@@ -5,11 +5,14 @@ TagManager:
   serializedVersion: 2
   tags:
   - Bonus
+  - Pellet
+  - Ghost
+  - PowerPill
   layers:
   - Default
   - TransparentFX
   - Ignore Raycast
-  - 
+  - Wall
   - Water
   - UI
   - 

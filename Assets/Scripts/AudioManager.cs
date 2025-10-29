@@ -4,37 +4,33 @@ using UnityEngine;
 
 public class AudioManager : MonoBehaviour
 {
-    [Header("Background Music")]
+    [Header("Sources")]
     public AudioSource bgmSource;
-
-    [Header("Sound Effects")]
     public AudioSource sfxSource;
+
+    [Header("BGM")]
+    public AudioClip bgmNormal;
+    public AudioClip bgmScared;
+    public AudioClip bgmDead;
+
+    [Header("SFX")]
     public AudioClip sfxMove;
     public AudioClip sfxEatPellet;
-    public AudioClip sfxCollideWall;
     public AudioClip sfxDeath;
-
-    public void PlaySFX(AudioClip clip)
-    {
-        if (clip != null && sfxSource != null)
-        {
-            sfxSource.PlayOneShot(clip);
-        }
-    }
+    public AudioClip sfxCollideWall;
 
     public void PlayBGM(AudioClip clip, bool loop = true)
     {
-        if (clip != null && bgmSource != null)
-        {
-            bgmSource.clip = clip;
-            bgmSource.loop = loop;
-            bgmSource.Play();
-        }
+        if (!bgmSource || !clip) return;
+        if (bgmSource.clip == clip && bgmSource.isPlaying) return;
+        bgmSource.loop = loop;
+        bgmSource.clip = clip;
+        bgmSource.Play();
     }
 
-    public void StopBGM()
+    public void PlaySFX(AudioClip clip)
     {
-        if (bgmSource != null)
-            bgmSource.Stop();
+        if (!sfxSource || !clip) return;
+        sfxSource.PlayOneShot(clip);
     }
 }

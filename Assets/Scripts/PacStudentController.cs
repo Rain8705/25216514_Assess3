@@ -1,60 +1,73 @@
 ﻿using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 
 public class PacStudentController : MonoBehaviour
 {
-    public float moveSpeed = 4f;
-    public AudioManager audioManager;
+    [Header("Movement Settings")]
+    public float moveSpeed = 6f;  // tiles per second
+    public LayerMask wallLayer;
 
-    private Vector2 targetGridPos;
-    private Vector2 direction = Vector2.zero;
-    private Vector2 currentInput = Vector2.zero;
-    private Vector2 lastInput = Vector2.zero;
-    private bool isMoving = false;
+    [Header("Particles & Effects")]
+    public ParticleSystem wallBumpParticles;
+    public ParticleSystem deathParticles;
 
-    private Animator animator;
-    private Rigidbody2D rb;
+    Rigidbody2D rb;
+    Animator anim;
+    AudioManager audioMgr;
+    AudioSource moveAudio;
+    SpriteRenderer sr; // <— for flipping
+
+    Vector2 targetPos;
+    Vector2 currentInput = Vector2.right;
+    Vector2 lastInput = Vector2.zero;
+    bool isMoving = false;
+
+    Vector3 spawnPos;
+    Coroutine moveRoutine;
 
     void Start()
     {
         rb = GetComponent<Rigidbody2D>();
-        animator = GetComponent<Animator>();
-        audioManager = FindFirstObjectByType<AudioManager>();
+        anim = GetComponent<Animator>();
+        sr = GetComponent<SpriteRenderer>();
+        audioMgr = FindFirstObjectByType<AudioManager>();
 
-        // start facing right
-        currentInput = Vector2.right;
-        targetGridPos = transform.position;
+        moveAudio = gameObject.AddComponent<AudioSource>();
+        moveAudio.loop = true;
+        moveAudio.playOnAwake = false;
+        moveAudio.volume = 0.7f;
+
+        spawnPos = transform.position;
+        targetPos = transform.position;
+
+        if (rb)
+        {
+            rb.isKinematic = true;
+            rb.interpolation = RigidbodyInterpolation2D.Interpolate;
+        }
     }
 
     void Update()
     {
-        HandleInput();
-
-        if (!isMoving)
+        if (GameManager.I == null || !GameManager.I.canPlayerMove)
         {
-            TryMove();
+            StopMoveAudio();
+            if (anim) anim.SetBool("isMoving", false);
+            return;
         }
-        else
-        {
-            MoveToTarget();
-        }
-    }
 
-    void HandleInput()
-    {
-        if (Input.GetKeyDown(KeyCode.W))
-            lastInput = Vector2.up;
-        else if (Input.GetKeyDown(KeyCode.S))
-            lastInput = Vector2.down;
-        else if (Input.GetKeyDown(KeyCode.A))
-            lastInput = Vector2.left;
-        else if (Input.GetKeyDown(KeyCode.D))
-            lastInput = Vector2.right;
+        // --- Handle input ---
+        if (Input.GetKeyDown(KeyCode.W)) lastInput = Vector2.up;
+        else if (Input.GetKeyDown(KeyCode.S)) lastInput = Vector2.down;
+        else if (Input.GetKeyDown(KeyCode.A)) lastInput = Vector2.left;
+        else if (Input.GetKeyDown(KeyCode.D)) lastInput = Vector2.right;
+
+        if (!isMoving) TryMove();
     }
 
     void TryMove()
     {
-        // first check new input direction
         if (CanMove(lastInput))
         {
             currentInput = lastInput;
@@ -66,83 +79,155 @@ public class PacStudentController : MonoBehaviour
         }
         else
         {
-            StopMove();
+            StopMoveAudio();
+            if (wallBumpParticles) wallBumpParticles.Play();
+            if (audioMgr) audioMgr.PlaySFX(audioMgr.sfxCollideWall);
+            if (anim) anim.SetBool("isMoving", false);
         }
     }
 
     void StartMove(Vector2 dir)
     {
-        targetGridPos = (Vector2)transform.position + dir;
+        if (isMoving) return;
+
+        targetPos = (Vector2)transform.position + dir;
         isMoving = true;
 
-        if (animator != null)
+        // --- Animator parameters ---
+        if (anim)
         {
-            animator.SetBool("isMoving", true);
+            anim.SetBool("isMoving", true);
+            anim.SetFloat("MoveX", dir.x);
+            anim.SetFloat("MoveY", dir.y);
         }
 
-        if (audioManager != null)
+        // --- Flip sprite when moving left/right ---
+        if (sr != null)
         {
-            audioManager.PlaySFX(audioManager.sfxMove);
+            if (dir.x < 0) sr.flipX = true;
+            else if (dir.x > 0) sr.flipX = false;
         }
+
+        // --- Play move audio ---
+        StartMoveAudio();
+
+        if (moveRoutine != null) StopCoroutine(moveRoutine);
+        moveRoutine = StartCoroutine(LerpMove(transform.position, targetPos));
     }
 
-    void StopMove()
+    IEnumerator LerpMove(Vector2 start, Vector2 end)
     {
+        float elapsed = 0f;
+        float duration = 1f / moveSpeed;
+
+        while (elapsed < duration)
+        {
+            transform.position = Vector2.Lerp(start, end, elapsed / duration);
+            elapsed += Time.deltaTime;
+            yield return null;
+        }
+
+        transform.position = end;
         isMoving = false;
-        if (animator != null)
-        {
-            animator.SetBool("isMoving", false);
-        }
-    }
 
-    void MoveToTarget()
-    {
-        transform.position = Vector2.MoveTowards(
-            transform.position,
-            targetGridPos,
-            moveSpeed * Time.deltaTime
-        );
-
-        if (Vector2.Distance(transform.position, targetGridPos) < 0.01f)
-        {
-            transform.position = targetGridPos;
-            isMoving = false;
-        }
+        StopMoveAudio();
+        if (anim) anim.SetBool("isMoving", false);
     }
 
     bool CanMove(Vector2 dir)
     {
-        RaycastHit2D hit = Physics2D.Raycast(transform.position, dir, 1f, LayerMask.GetMask("Wall"));
-        return hit.collider == null;
+        if (dir == Vector2.zero) return false;
+        Vector2 check = (Vector2)transform.position + dir * 0.5f;
+        return !Physics2D.OverlapCircle(check, 0.28f, wallLayer);
     }
 
-    private void OnTriggerEnter2D(Collider2D collision)
+    // -------------------- AUDIO HELPERS --------------------
+    void StartMoveAudio()
     {
-        // pellets
-        if (collision.CompareTag("Pellet"))
+        if (audioMgr && audioMgr.sfxMove && moveAudio)
         {
-            audioManager.PlaySFX(audioManager.sfxEatPellet);
-            Destroy(collision.gameObject);
-        }
+            if (moveAudio.clip != audioMgr.sfxMove)
+                moveAudio.clip = audioMgr.sfxMove;
 
-        if (collision.CompareTag("Bonus"))
-        {
-            Debug.Log("Cherry eaten!");
-            audioManager.PlaySFX(audioManager.sfxEatPellet);
-
-            CherryController cherryController = FindFirstObjectByType<CherryController>();
-            if (cherryController != null)
-            {
-                cherryController.HideCherryTemporarily();
-            }
-        }
-
-        // ghosts
-        if (collision.CompareTag("Ghost"))
-        {
-            audioManager.PlaySFX(audioManager.sfxDeath);
-            Debug.Log("PacStudent hit a ghost!");
-            StopMove();
+            if (!moveAudio.isPlaying)
+                moveAudio.Play();
         }
     }
+
+    void StopMoveAudio()
+    {
+        if (moveAudio && moveAudio.isPlaying)
+            moveAudio.Stop();
+    }
+
+    // -------------------- COLLISION HANDLING --------------------
+    void OnTriggerEnter2D(Collider2D other)
+    {
+        if (other.CompareTag("Pellet"))
+        {
+            Destroy(other.gameObject);
+            GameManager.I.hud.AddScore(10);
+            GameManager.I.pelletsRemaining--;
+            if (GameManager.I.pelletsRemaining <= 0)
+                GameManager.I.OnAllPelletsEaten();
+
+            if (audioMgr) audioMgr.PlaySFX(audioMgr.sfxEatPellet);
+        }
+        else if (other.CompareTag("PowerPill"))
+        {
+            Destroy(other.gameObject);
+            GameManager.I.hud.AddScore(50);
+            GameManager.I.StartScaredMode();
+            if (audioMgr) audioMgr.PlaySFX(audioMgr.sfxEatPellet);
+        }
+        else if (other.CompareTag("Bonus"))
+        {
+            GameManager.I.hud.AddScore(100);
+            if (audioMgr) audioMgr.PlaySFX(audioMgr.sfxEatPellet);
+            CherryController cc = FindFirstObjectByType<CherryController>();
+            if (cc) cc.HideCherryTemporarily();
+        }
+        else if (other.CompareTag("Ghost"))
+        {
+            GameManager.I.hud.LoseLife();
+            GameManager.I.OnPacDied();
+        }
+    }
+
+    // -------------------- STATE CONTROL --------------------
+    public void AwaitInput()
+    {
+        isMoving = false;
+        StopMoveAudio();
+        if (anim) anim.SetBool("isMoving", false);
+    }
+
+    public void Respawn()
+    {
+        if (moveRoutine != null) StopCoroutine(moveRoutine);
+        transform.position = spawnPos;
+        targetPos = spawnPos;
+        currentInput = Vector2.right;
+        lastInput = Vector2.zero;
+        isMoving = false;
+        StopMoveAudio();
+        if (anim) anim.SetBool("isMoving", false);
+    }
+
+    public void PlayDeathParticles()
+    {
+        if (deathParticles) deathParticles.Play();
+        StopMoveAudio();
+    }
+    public void TeleportTo(Vector2 pos, Vector2 continueDir)
+    {
+        transform.position = pos;
+        targetPos = pos + continueDir;
+        currentInput = continueDir;
+        lastInput = continueDir;
+        isMoving = false;
+
+        if (anim) anim.SetBool("isMoving", true);
+    }
+
 }
